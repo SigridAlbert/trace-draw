@@ -9,7 +9,7 @@ const ASSETS = [
   './icon-512.png',
   'https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Mono:wght@300;400;500&display=swap'
 ];
-
+<!-- edit -->
 // Install: cache all assets
 self.addEventListener('install', e => {
   e.waitUntil(
