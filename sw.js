@@ -1,4 +1,4 @@
-const CACHE = 'trace-draw-v1';
+const CACHE = 'trace-draw-v2';
 
 // Files to cache for offline use
 const ASSETS = [
