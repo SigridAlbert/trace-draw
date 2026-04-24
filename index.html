@@ -1,0 +1,693 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Trace & Draw</title>
+
+<!-- PWA -->
+<link rel="manifest" href="manifest.json">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Trace">
+<meta name="theme-color" content="#1a1410">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Mono:wght@300;400;500&display=swap');
+  :root { --ink:#1a1410; --paper:#f5f0e8; --amber:#c8832a; --al:#e9b96e; --sepia:#8b6914; }
+  * { box-sizing:border-box; margin:0; padding:0; touch-action:manipulation; }
+  html,body { height:100%; background:var(--ink); font-family:'DM Mono',monospace; overflow:hidden; }
+
+  #camera-layer { position:fixed; inset:0; z-index:0; background:#000; }
+  #video { width:100%; height:100%; object-fit:cover; display:block; }
+
+  #ghost-layer { position:fixed; inset:0; z-index:1; background:var(--paper); opacity:0; pointer-events:none; transition:opacity .3s; overflow:hidden; }
+  #ghost-wrap { position:absolute; top:0; left:0; transform-origin:0 0; }
+  #ghost-img { display:block; mix-blend-mode:multiply; opacity:.62; filter:contrast(135%) brightness(110%); user-select:none; -webkit-user-drag:none; }
+
+  /* Pan layer — fixed, covers screen, only active in pan mode */
+  #pan-layer { position:fixed; inset:0; z-index:6; display:none; touch-action:none; }
+  #pan-layer.active { display:block; }
+
+  /* Paper border */
+  #paper-border { position:fixed; z-index:8; border:2px dashed rgba(200,131,42,.75); display:none; box-shadow:0 0 0 2000px rgba(0,0,0,.3); }
+  #paper-border.show { display:block; }
+  .crn { position:absolute; width:22px; height:22px; border-color:var(--al); border-style:solid; }
+  .crn.tl { top:-2px; left:-2px;   border-width:3px 0 0 3px; }
+  .crn.tr { top:-2px; right:-2px;  border-width:3px 3px 0 0; }
+  .crn.bl { bottom:-2px; left:-2px;  border-width:0 0 3px 3px; }
+  .crn.br { bottom:-2px; right:-2px; border-width:0 3px 3px 0; }
+  #border-label { position:absolute; top:7px; left:50%; transform:translateX(-50%); font-size:10px; letter-spacing:1.5px; text-transform:uppercase; color:rgba(233,185,110,.6); white-space:nowrap; pointer-events:none; }
+  #border-drag { position:fixed; z-index:9; display:none; touch-action:none; cursor:move; }
+  #border-drag.show { display:block; }
+  .rhandle { position:fixed; z-index:9; display:none; touch-action:none; background:var(--amber); border:2px solid var(--ink); border-radius:50%; align-items:center; justify-content:center; color:var(--ink); box-shadow:0 2px 8px rgba(0,0,0,.5); }
+  .rhandle.show { display:flex; }
+  #rh-corner { width:38px; height:38px; cursor:nwse-resize; }
+  #rh-corner svg { width:15px; height:15px; }
+  #rh-right  { width:28px; height:28px; cursor:ew-resize; }
+  #rh-right svg { width:13px; height:13px; }
+  #rh-bottom { width:28px; height:28px; cursor:ns-resize; }
+  #rh-bottom svg { width:13px; height:13px; }
+
+  /* UI shell — z-index 10, pointer-events none by default */
+  #ui-layer { position:fixed; inset:0; z-index:10; pointer-events:none; display:flex; flex-direction:column; justify-content:space-between; }
+  #top-bar { pointer-events:all; padding:16px 20px 12px; display:flex; align-items:flex-start; justify-content:space-between; background:linear-gradient(to bottom,rgba(26,20,16,.7),transparent); }
+  .wordmark { font-family:'DM Serif Display',serif; font-style:italic; font-size:22px; color:var(--al); letter-spacing:-.5px; line-height:1; }
+  .wordmark span { font-style:normal; font-size:11px; color:rgba(233,185,110,.5); display:block; letter-spacing:2px; text-transform:uppercase; font-family:'DM Mono',monospace; margin-top:2px; }
+  .top-right { display:flex; flex-direction:column; gap:6px; align-items:flex-end; }
+
+  #opacity-wrap { display:flex; align-items:center; gap:8px; background:rgba(26,20,16,.55); border:1px solid rgba(200,131,42,.3); border-radius:20px; padding:6px 14px; backdrop-filter:blur(8px); }
+  #opacity-wrap label { font-size:10px; color:rgba(233,185,110,.7); letter-spacing:1.5px; text-transform:uppercase; }
+  #opacity-slider { -webkit-appearance:none; appearance:none; width:90px; height:3px; background:linear-gradient(to right,var(--amber) var(--val,70%),rgba(255,255,255,.15) var(--val,70%)); border-radius:2px; outline:none; }
+  #opacity-slider::-webkit-slider-thumb { -webkit-appearance:none; width:22px; height:22px; border-radius:50%; background:var(--al); border:2px solid var(--ink); cursor:pointer; }
+
+  #cam-wrap { display:flex; align-items:center; gap:8px; background:rgba(26,20,16,.55); border:1px solid rgba(200,131,42,.3); border-radius:20px; padding:6px 14px; backdrop-filter:blur(8px); }
+  #cam-wrap label { font-size:10px; color:rgba(233,185,110,.7); letter-spacing:1.5px; text-transform:uppercase; }
+  #zoom-slider { -webkit-appearance:none; appearance:none; width:140px; height:6px; background:linear-gradient(to right,var(--amber) 0%,rgba(255,255,255,.15) 0%); border-radius:3px; outline:none; }
+  #zoom-slider::-webkit-slider-thumb { -webkit-appearance:none; width:26px; height:26px; border-radius:50%; background:var(--al); border:2px solid var(--ink); cursor:pointer; }
+  .zoom-step { width:32px; height:32px; border-radius:50%; background:rgba(200,131,42,.15); border:1px solid rgba(200,131,42,.4); color:var(--al); font-size:20px; display:flex; align-items:center; justify-content:center; flex-shrink:0; cursor:pointer; }
+  .zoom-step:active { background:var(--amber); color:var(--ink); }
+  #zoom-manual { width:54px; background:rgba(200,131,42,.1); border:1px solid rgba(200,131,42,.35); border-radius:8px; color:var(--al); font-family:'DM Mono',monospace; font-size:13px; text-align:center; padding:4px 2px; outline:none; -moz-appearance:textfield; }
+  #zoom-manual::-webkit-inner-spin-button, #zoom-manual::-webkit-outer-spin-button { -webkit-appearance:none; }
+  #ultrawide-btn { display:flex; align-items:center; gap:5px; background:rgba(200,131,42,.12); border:1px solid rgba(200,131,42,.35); border-radius:14px; padding:4px 10px; color:var(--al); font-family:'DM Mono',monospace; font-size:10px; letter-spacing:1px; cursor:pointer; }
+  #ultrawide-btn.active { background:var(--amber); color:var(--ink); }
+
+  #bottom-bar { pointer-events:all; padding:16px 20px 32px; display:flex; align-items:flex-end; justify-content:space-between; background:linear-gradient(to top,rgba(26,20,16,.75),transparent); }
+  .btn { cursor:pointer; border:none; outline:none; user-select:none; -webkit-tap-highlight-color:transparent; transition:transform .12s,opacity .12s; }
+  .btn:active { transform:scale(.93); opacity:.8; }
+  .icon-btn { width:48px; height:48px; border-radius:50%; background:rgba(26,20,16,.6); border:1px solid rgba(200,131,42,.35); display:flex; align-items:center; justify-content:center; backdrop-filter:blur(8px); color:var(--al); }
+  .icon-btn svg { width:22px; height:22px; }
+  #trace-toggle { width:60px; height:60px; border-radius:50%; background:var(--amber); border:2px solid var(--al); box-shadow:0 0 18px rgba(200,131,42,.5); display:flex; align-items:center; justify-content:center; color:var(--ink); }
+  #trace-toggle svg { width:26px; height:26px; }
+  #trace-toggle.active { background:var(--paper); color:var(--sepia); }
+  .btn-col { display:flex; flex-direction:column; gap:8px; }
+
+  /* Size panel */
+  #size-panel { position:fixed; bottom:115px; left:50%; transform:translateX(-50%); z-index:15; background:rgba(20,15,10,.96); border:1px solid rgba(200,131,42,.45); border-radius:18px; padding:16px 18px; backdrop-filter:blur(14px); display:none; flex-direction:column; gap:12px; width:310px; pointer-events:all; box-shadow:0 8px 32px rgba(0,0,0,.6); }
+  #size-panel.show { display:flex; }
+  #size-panel h3 { font-size:10px; letter-spacing:2px; text-transform:uppercase; color:rgba(233,185,110,.55); }
+  .size-row { display:flex; gap:8px; flex-wrap:wrap; }
+  .size-btn { font-family:'DM Mono',monospace; font-size:11px; padding:6px 12px; border-radius:20px; border:1px solid rgba(200,131,42,.3); background:rgba(200,131,42,.08); color:var(--al); cursor:pointer; }
+  .size-btn.active { background:var(--amber); color:var(--ink); border-color:var(--amber); }
+  .custom-row { display:flex; align-items:center; gap:8px; }
+  .custom-row label { font-size:10px; letter-spacing:1px; text-transform:uppercase; color:rgba(233,185,110,.55); white-space:nowrap; }
+  .ratio-input { width:52px; background:rgba(200,131,42,.1); border:1px solid rgba(200,131,42,.35); border-radius:8px; color:var(--al); font-family:'DM Mono',monospace; font-size:14px; text-align:center; padding:5px 4px; outline:none; }
+  .ratio-sep { color:rgba(233,185,110,.5); font-size:16px; }
+  .apply-btn { font-family:'DM Mono',monospace; font-size:11px; padding:6px 14px; border-radius:20px; border:1px solid rgba(200,131,42,.4); background:rgba(200,131,42,.15); color:var(--al); cursor:pointer; }
+  .apply-btn:active { background:var(--amber); color:var(--ink); }
+  .orient-row { display:flex; gap:8px; }
+  .orient-btn { flex:1; font-family:'DM Mono',monospace; font-size:11px; padding:8px; border-radius:10px; border:1px solid rgba(200,131,42,.25); background:rgba(200,131,42,.06); color:var(--al); cursor:pointer; text-align:center; }
+  .orient-btn.active { background:rgba(200,131,42,.22); border-color:var(--amber); }
+  #prop-lock-btn { background:rgba(200,131,42,.06); border:1px solid rgba(200,131,42,.25); }
+  #prop-lock-btn.active { background:rgba(200,131,42,.22); border-color:var(--amber); }
+  .panel-hint { font-size:10px; color:rgba(233,185,110,.3); text-align:center; line-height:1.5; }
+  .panel-close { align-self:center; font-size:10px; letter-spacing:1.5px; text-transform:uppercase; color:rgba(233,185,110,.4); background:none; border:1px solid rgba(200,131,42,.2); border-radius:20px; font-family:'DM Mono',monospace; cursor:pointer; padding:5px 16px; }
+
+  /* Splash */
+  #splash { position:fixed; inset:0; z-index:5; display:flex; flex-direction:column; align-items:center; justify-content:center; pointer-events:none; gap:12px; transition:opacity .5s; }
+  #splash.hidden { opacity:0; }
+  .splash-icon { width:72px; height:72px; border:2px solid rgba(200,131,42,.4); border-radius:50%; display:flex; align-items:center; justify-content:center; color:rgba(200,131,42,.5); animation:breathe 3s ease-in-out infinite; }
+  .splash-icon svg { width:34px; height:34px; }
+  @keyframes breathe { 0%,100%{opacity:.4;transform:scale(1)} 50%{opacity:.8;transform:scale(1.06)} }
+  .splash-text { font-family:'DM Serif Display',serif; font-style:italic; font-size:18px; color:rgba(233,185,110,.5); text-align:center; }
+  .splash-sub { font-size:11px; color:rgba(233,185,110,.3); letter-spacing:1.5px; text-transform:uppercase; text-align:center; }
+
+  #status-pill { position:fixed; top:80px; left:50%; transform:translateX(-50%); z-index:20; background:rgba(26,20,16,.8); border:1px solid rgba(200,131,42,.4); border-radius:20px; padding:5px 16px; font-size:10px; letter-spacing:1.5px; text-transform:uppercase; color:var(--al); backdrop-filter:blur(8px); opacity:0; transition:opacity .3s; pointer-events:none; white-space:nowrap; }
+  #status-pill.show { opacity:1; }
+
+  #grid-layer { position:fixed; inset:0; z-index:2; pointer-events:none; opacity:0; transition:opacity .3s; background-image:linear-gradient(rgba(200,131,42,.12) 1px,transparent 1px),linear-gradient(90deg,rgba(200,131,42,.12) 1px,transparent 1px); background-size:60px 60px; }
+  #grid-layer.show { opacity:1; }
+  #file-input { display:none; }
+</style>
+</head>
+<body>
+
+<div id="camera-layer"><video id="video" autoplay playsinline muted></video></div>
+
+<div id="ghost-layer">
+  <div id="ghost-wrap"><img id="ghost-img" alt="" draggable="false"></div>
+</div>
+
+<div id="grid-layer"></div>
+
+<!-- Pan layer: sits between grid(2) and border(8), only active in pan mode -->
+<div id="pan-layer"></div>
+
+<div id="paper-border">
+  <div class="crn tl"></div><div class="crn tr"></div>
+  <div class="crn bl"></div><div class="crn br"></div>
+  <div id="border-label">Custom</div>
+</div>
+<div id="border-drag"></div>
+<div class="rhandle" id="rh-right"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 18l6-6-6-6"/></svg></div>
+<div class="rhandle" id="rh-bottom"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 9l-6 6-6-6"/></svg></div>
+<div class="rhandle" id="rh-corner"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg></div>
+
+<div id="size-panel">
+  <h3>Paper / Canvas Size</h3>
+  <div class="size-row">
+    <button class="size-btn" data-w="210" data-h="297" data-label="A4">A4</button>
+    <button class="size-btn" data-w="148" data-h="210" data-label="A5">A5</button>
+    <button class="size-btn" data-w="216" data-h="279" data-label="Letter">Letter</button>
+    <button class="size-btn" data-w="100" data-h="150" data-label="4x6">4x6"</button>
+    <button class="size-btn" data-w="127" data-h="178" data-label="5x7">5x7"</button>
+    <button class="size-btn" data-w="203" data-h="254" data-label="8x10">8x10"</button>
+  </div>
+  <div class="custom-row">
+    <label>Ratio</label>
+    <input class="ratio-input" id="ratio-w" type="number" min="1" max="99" value="1">
+    <span class="ratio-sep">:</span>
+    <input class="ratio-input" id="ratio-h" type="number" min="1" max="99" value="3">
+    <button class="apply-btn btn" id="apply-ratio">Apply</button>
+  </div>
+  <div class="orient-row">
+    <button class="orient-btn active" id="portrait-btn">Portrait</button>
+    <button class="orient-btn" id="landscape-btn">Landscape</button>
+    <button class="orient-btn" id="prop-lock-btn">Unlock</button>
+  </div>
+  <p class="panel-hint">Drag border to move · handles to resize · Lock holds ratio</p>
+  <button class="panel-close btn" id="close-size-panel">Done</button>
+</div>
+
+<div id="splash">
+  <div class="splash-icon">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+      <circle cx="12" cy="12" r="3"/>
+      <path d="M12 1v3M12 20v3M4.22 4.22l2.12 2.12M17.66 17.66l2.12 2.12M1 12h3M20 12h3M4.22 19.78l2.12-2.12M17.66 6.34l2.12-2.12"/>
+    </svg>
+  </div>
+  <p class="splash-text">Load a photo to begin tracing</p>
+  <p class="splash-sub">Tap the gallery icon to start</p>
+</div>
+
+<div id="status-pill"></div>
+
+<div id="ui-layer">
+  <div id="top-bar">
+    <div class="wordmark">Trace<span>Drawing overlay</span></div>
+    <div class="top-right">
+      <div id="opacity-wrap">
+        <label for="opacity-slider">Fade</label>
+        <input type="range" id="opacity-slider" min="0" max="100" value="70">
+      </div>
+      <div id="cam-wrap">
+        <button class="btn" id="ultrawide-btn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="16" height="16"><path d="M1 12s3-7 11-7 11 7 11 7-3 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>
+          <span id="ultrawide-label">Wide</span>
+        </button>
+        <label>Zoom</label>
+        <button class="btn zoom-step" id="zoom-minus">-</button>
+        <input type="range" id="zoom-slider" min="0" max="100" value="0">
+        <button class="btn zoom-step" id="zoom-plus">+</button>
+        <input type="number" id="zoom-manual" min="0.1" max="10" step="0.05" value="1.00">
+      </div>
+    </div>
+  </div>
+
+  <div id="bottom-bar">
+    <div class="btn-col">
+      <button class="btn icon-btn" id="grid-btn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+      </button>
+      <button class="btn icon-btn" id="mirror-btn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 3v18M3 7l5 5-5 5M21 7l-5 5 5 5"/></svg>
+      </button>
+      <button class="btn icon-btn" id="pan-btn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 9l-3 3 3 3M9 5l3-3 3 3M15 19l-3 3-3-3M19 9l3 3-3 3"/><circle cx="12" cy="12" r="2.5"/></svg>
+      </button>
+    </div>
+
+    <button class="btn" id="trace-toggle">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19l-7-7 2.5-2.5 4.5 4.5L19.5 6 22 8.5z"/><circle cx="5" cy="19" r="2" fill="currentColor" stroke="none"/></svg>
+    </button>
+
+    <div class="btn-col">
+      <button class="btn icon-btn" id="gallery-btn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+      </button>
+      <button class="btn icon-btn" id="border-btn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="4" y="3" width="16" height="18" rx="1"/></svg>
+      </button>
+    </div>
+  </div>
+</div>
+
+<input type="file" id="file-input" accept="image/*">
+
+<script>
+// ── ALL STATE FIRST ──
+let imgNatW=1, imgNatH=1, imgX=0, imgY=0, imgScale=1;
+let bX=0, bY=0, bW=300, bH=200;
+let selLabel='Custom', selRatioW=1, selRatioH=3;
+let tracing=false, mirrored=false, gridOn=false;
+let borderOn=false, landscape=false, propLocked=false, panMode=false;
+let currentStream=null, useUltrawide=false;
+let zoomRange={min:1,max:3,step:0.05}, currentZoom=1;
+let statusTimer=null, saveDebounce=null, isRestoring=false;
+let lockedAspect=1;
+
+// ── ELEMENTS ──
+const video         = document.getElementById('video');
+const ghostLayer    = document.getElementById('ghost-layer');
+const ghostWrap     = document.getElementById('ghost-wrap');
+const ghostImg      = document.getElementById('ghost-img');
+const panLayer      = document.getElementById('pan-layer');
+const opSlider      = document.getElementById('opacity-slider');
+const traceToggle   = document.getElementById('trace-toggle');
+const gridBtn       = document.getElementById('grid-btn');
+const gridLayer     = document.getElementById('grid-layer');
+const mirrorBtn     = document.getElementById('mirror-btn');
+const panBtn        = document.getElementById('pan-btn');
+const galleryBtn    = document.getElementById('gallery-btn');
+const fileInput     = document.getElementById('file-input');
+const statusPill    = document.getElementById('status-pill');
+const splash        = document.getElementById('splash');
+const borderEl      = document.getElementById('paper-border');
+const borderLabel   = document.getElementById('border-label');
+const borderDrag    = document.getElementById('border-drag');
+const rhCorner      = document.getElementById('rh-corner');
+const rhRight       = document.getElementById('rh-right');
+const rhBottom      = document.getElementById('rh-bottom');
+const borderBtn     = document.getElementById('border-btn');
+const sizePanel     = document.getElementById('size-panel');
+const closeSizePanel= document.getElementById('close-size-panel');
+const portraitBtn   = document.getElementById('portrait-btn');
+const landscapeBtn  = document.getElementById('landscape-btn');
+const propLockBtn   = document.getElementById('prop-lock-btn');
+const applyRatioBtn = document.getElementById('apply-ratio');
+const ratioW        = document.getElementById('ratio-w');
+const ratioH        = document.getElementById('ratio-h');
+const zoomSlider    = document.getElementById('zoom-slider');
+const zoomManual    = document.getElementById('zoom-manual');
+const zoomMinus     = document.getElementById('zoom-minus');
+const zoomPlus      = document.getElementById('zoom-plus');
+const ultrawideBtn  = document.getElementById('ultrawide-btn');
+const ultrawideLabel= document.getElementById('ultrawide-label');
+
+// ── PERSISTENCE ──
+const STORE_KEY = 'traceapp_v7';
+
+function updateBorderLabel(){
+  borderLabel.textContent=selLabel+' · '+(landscape?'Landscape':'Portrait')+(propLocked?' [locked]':'');
+}
+function applyBorder(){
+  borderEl.style.left=bX+'px'; borderEl.style.top=bY+'px';
+  borderEl.style.width=bW+'px'; borderEl.style.height=bH+'px';
+  borderDrag.style.left=bX+'px'; borderDrag.style.top=bY+'px';
+  borderDrag.style.width=bW+'px'; borderDrag.style.height=bH+'px';
+  rhRight.style.left=(bX+bW-14)+'px'; rhRight.style.top=(bY+bH/2-14)+'px';
+  rhBottom.style.left=(bX+bW/2-14)+'px'; rhBottom.style.top=(bY+bH-14)+'px';
+  rhCorner.style.left=(bX+bW-19)+'px'; rhCorner.style.top=(bY+bH-19)+'px';
+}
+function updatePropLockBtn(){
+  propLockBtn.textContent=propLocked?'Locked':'Unlock';
+  propLockBtn.classList.toggle('active',propLocked);
+  updateBorderLabel();
+}
+function saveState(){
+  if(isRestoring) return;
+  try{
+    localStorage.setItem(STORE_KEY+'_state', JSON.stringify({
+      imgX,imgY,imgScale,imgNatW,imgNatH,
+      mirrored,gridOn,borderOn,landscape,propLocked,
+      bX,bY,bW,bH,selLabel,selRatioW,selRatioH,
+      opacity:+opSlider.value, cameraZoom:currentZoom
+    }));
+  }catch(e){}
+}
+function debouncedSave(){
+  if(isRestoring) return;
+  clearTimeout(saveDebounce);
+  saveDebounce=setTimeout(saveState,600);
+}
+function loadSaved(){
+  try{
+    const raw=localStorage.getItem(STORE_KEY+'_state');
+    if(!raw) return;
+    const s=JSON.parse(raw);
+    imgX    =s.imgX    !=null?+s.imgX    :0;
+    imgY    =s.imgY    !=null?+s.imgY    :0;
+    imgScale=s.imgScale!=null?+s.imgScale:1;
+    imgNatW =s.imgNatW !=null?+s.imgNatW :1;
+    imgNatH =s.imgNatH !=null?+s.imgNatH :1;
+    mirrored=!!s.mirrored; gridOn=!!s.gridOn;
+    borderOn=!!s.borderOn; landscape=!!s.landscape; propLocked=!!s.propLocked;
+    bX=s.bX!=null?+s.bX:0; bY=s.bY!=null?+s.bY:0;
+    bW=s.bW!=null?+s.bW:300; bH=s.bH!=null?+s.bH:200;
+    selLabel=s.selLabel||'Custom';
+    selRatioW=s.selRatioW!=null?+s.selRatioW:1;
+    selRatioH=s.selRatioH!=null?+s.selRatioH:3;
+    currentZoom=s.cameraZoom!=null?+s.cameraZoom:1;
+    lockedAspect=(bW&&bH)?bW/bH:1;
+    if(s.opacity){opSlider.value=s.opacity;opSlider.style.setProperty('--val',s.opacity+'%');}
+    ratioW.value=selRatioW; ratioH.value=selRatioH;
+    if(mirrored) mirrorBtn.style.color='var(--al)';
+    if(gridOn){gridLayer.classList.add('show');gridBtn.style.color='var(--al)';}
+    if(landscape){landscapeBtn.classList.add('active');portraitBtn.classList.remove('active');}
+    updatePropLockBtn();
+    if(borderOn){
+      updateBorderLabel(); applyBorder();
+      borderEl.classList.add('show'); borderDrag.classList.add('show');
+      [rhCorner,rhRight,rhBottom].forEach(h=>h.classList.add('show'));
+      borderBtn.style.color='var(--al)';
+    }
+    const imgData=localStorage.getItem(STORE_KEY+'_img');
+    if(imgData){
+      isRestoring=true;
+      ghostImg.onload=()=>{
+        imgNatW=ghostImg.naturalWidth; imgNatH=ghostImg.naturalHeight;
+        applyImageTransform();
+        isRestoring=false;
+        splash.classList.add('hidden');
+        showStatus('Session restored');
+      };
+      ghostImg.src=imgData;
+    }
+  }catch(e){console.warn('loadSaved failed',e);}
+}
+
+// ── STATUS ──
+function showStatus(msg){
+  statusPill.textContent=msg; statusPill.classList.add('show');
+  clearTimeout(statusTimer);
+  statusTimer=setTimeout(()=>statusPill.classList.remove('show'),2400);
+}
+
+// ── CAMERA ──
+async function startCamera(ultrawide=false){
+  if(currentStream) currentStream.getTracks().forEach(t=>t.stop());
+  const c={audio:false,video:{facingMode:'environment',width:{ideal:1920},height:{ideal:1080}}};
+  if(ultrawide){
+    try{
+      const devs=await navigator.mediaDevices.enumerateDevices();
+      const back=devs.filter(d=>d.kind==='videoinput'&&!/front|user|selfie|facetime/i.test(d.label));
+      const uw=back.find(d=>/ultra|wide|0\.5/i.test(d.label))||(back.length>1?back[back.length-1]:null);
+      if(uw) c.video.deviceId={exact:uw.deviceId};
+    }catch(e){}
+  }
+  try{
+    const stream=await navigator.mediaDevices.getUserMedia(c);
+    currentStream=stream; video.srcObject=stream;
+    const track=stream.getVideoTracks()[0];
+    const caps=track.getCapabilities?track.getCapabilities():{};
+    zoomRange=caps.zoom?{min:caps.zoom.min,max:caps.zoom.max,step:caps.zoom.step||0.05}:{min:1,max:3,step:0.05};
+    currentZoom=Math.max(zoomRange.min,Math.min(zoomRange.max,currentZoom));
+    syncZoomUI();
+    if(caps.zoom){try{await track.applyConstraints({advanced:[{zoom:currentZoom}]});}catch(e){}}
+    else{video.style.transformOrigin='center';video.style.transform=currentZoom<=1?'':('scale('+currentZoom+')');}
+  }catch(e){
+    try{const s=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'},audio:false});currentStream=s;video.srcObject=s;}
+    catch(e2){showStatus('Camera unavailable');}
+  }
+}
+function zoomToSlider(z){return((z-zoomRange.min)/(zoomRange.max-zoomRange.min))*100;}
+function sliderToZoom(v){return zoomRange.min+(v/100)*(zoomRange.max-zoomRange.min);}
+function syncZoomUI(){
+  const pct=zoomToSlider(currentZoom);
+  zoomSlider.value=pct;
+  zoomSlider.style.background='linear-gradient(to right,var(--amber) '+pct+'%,rgba(255,255,255,.15) '+pct+'%)';
+  zoomManual.value=currentZoom.toFixed(2);
+}
+async function applyZoom(zoom){
+  currentZoom=Math.max(zoomRange.min,Math.min(zoomRange.max,+zoom));
+  syncZoomUI(); debouncedSave();
+  if(!currentStream) return;
+  const track=currentStream.getVideoTracks()[0];
+  const caps=track.getCapabilities?track.getCapabilities():{};
+  if(caps.zoom){try{await track.applyConstraints({advanced:[{zoom:currentZoom}]});}catch(e){}}
+  else{video.style.transformOrigin='center';video.style.transform=currentZoom<=1?'':('scale('+currentZoom+')');}
+}
+zoomSlider.addEventListener('input',()=>applyZoom(sliderToZoom(+zoomSlider.value)));
+zoomManual.addEventListener('change',()=>applyZoom(parseFloat(zoomManual.value)));
+zoomManual.addEventListener('keydown',e=>{if(e.key==='Enter'){applyZoom(parseFloat(zoomManual.value));zoomManual.blur();}});
+function holdRepeat(btn,fn){
+  let t,iv;
+  btn.addEventListener('pointerdown',()=>{fn();t=setTimeout(()=>{iv=setInterval(fn,80);},400);});
+  ['pointerup','pointerleave','pointercancel'].forEach(ev=>btn.addEventListener(ev,()=>{clearTimeout(t);clearInterval(iv);}));
+}
+holdRepeat(zoomMinus,()=>applyZoom(currentZoom-0.05));
+holdRepeat(zoomPlus, ()=>applyZoom(currentZoom+0.05));
+ultrawideBtn.addEventListener('click',async()=>{
+  useUltrawide=!useUltrawide;
+  ultrawideBtn.classList.toggle('active',useUltrawide);
+  ultrawideLabel.textContent=useUltrawide?'Main':'Wide';
+  showStatus(useUltrawide?'Switching to ultrawide...':'Switching to main lens...');
+  await startCamera(useUltrawide);
+  showStatus(useUltrawide?'Ultrawide active':'Main lens active');
+});
+
+// ── OPACITY ──
+opSlider.addEventListener('input',()=>{
+  opSlider.style.setProperty('--val',opSlider.value+'%');
+  if(tracing) ghostLayer.style.opacity=opSlider.value/100*0.92;
+  debouncedSave();
+});
+opSlider.style.setProperty('--val',opSlider.value+'%');
+
+// ── TRACE ──
+traceToggle.addEventListener('click',()=>{
+  if(!ghostImg.src){showStatus('Load a photo first');return;}
+  tracing=!tracing;
+  traceToggle.classList.toggle('active',tracing);
+  ghostLayer.style.opacity=tracing?opSlider.value/100*0.92:0;
+  showStatus(tracing?'Overlay ON':'Overlay OFF');
+});
+
+// ── GALLERY ──
+galleryBtn.addEventListener('click',()=>fileInput.click());
+fileInput.addEventListener('change',e=>{
+  const f=e.target.files[0]; if(!f) return;
+  const reader=new FileReader();
+  reader.onload=ev=>{
+    const dataUrl=ev.target.result;
+    ghostImg.onload=()=>{
+      imgNatW=ghostImg.naturalWidth; imgNatH=ghostImg.naturalHeight;
+      resetImageView();
+      splash.classList.add('hidden');
+      showStatus('Saved · tap move icon to pan/zoom');
+      downscaleAndSave(dataUrl);
+    };
+    ghostImg.src=dataUrl;
+  };
+  reader.readAsDataURL(f);
+  fileInput.value='';
+});
+function downscaleAndSave(dataUrl){
+  const MAX=1600, tmp=new Image();
+  tmp.onload=()=>{
+    try{
+      let w=tmp.naturalWidth,h=tmp.naturalHeight;
+      if(w>MAX||h>MAX){const sc=MAX/Math.max(w,h);w=Math.round(w*sc);h=Math.round(h*sc);}
+      const c=document.createElement('canvas');
+      c.width=w; c.height=h; c.getContext('2d').drawImage(tmp,0,0,w,h);
+      localStorage.setItem(STORE_KEY+'_img',c.toDataURL('image/jpeg',0.88));
+      const sw=window.innerWidth,sh=window.innerHeight;
+      imgNatW=w; imgNatH=h;
+      imgScale=Math.max(sw/imgNatW,sh/imgNatH);
+      imgX=(sw-imgNatW*imgScale)/2; imgY=(sh-imgNatH*imgScale)/2;
+      saveState();
+    }catch(ex){showStatus('Image too large to save');}
+  };
+  tmp.src=dataUrl;
+}
+
+// ── IMAGE TRANSFORM ──
+function resetImageView(){
+  const sw=window.innerWidth,sh=window.innerHeight;
+  imgScale=Math.max(sw/imgNatW,sh/imgNatH);
+  imgX=(sw-imgNatW*imgScale)/2; imgY=(sh-imgNatH*imgScale)/2;
+  applyImageTransform();
+}
+function applyImageTransform(){
+  ghostImg.style.width=(imgNatW*imgScale)+'px';
+  ghostImg.style.height=(imgNatH*imgScale)+'px';
+  ghostWrap.style.transform='translate('+imgX+'px,'+imgY+'px)';
+  ghostImg.style.transform=mirrored?'scaleX(-1)':'';
+  debouncedSave();
+}
+
+// ── PAN / ZOOM ──
+// pan-layer is a plain HTML div at z-index 6 (above grid, below border/UI)
+// When active it captures all touches for pan/zoom
+panBtn.addEventListener('click',()=>{
+  panMode=!panMode;
+  panLayer.classList.toggle('active',panMode);
+  panBtn.style.color=panMode?'var(--al)':'';
+  showStatus(panMode?'Pan/zoom ON · tap icon to exit':'Pan/zoom OFF');
+});
+
+let ptrs={}, lastPinchDist=null, lastTap=0;
+
+panLayer.addEventListener('pointerdown',e=>{
+  ptrs[e.pointerId]={x:e.clientX,y:e.clientY};
+  panLayer.setPointerCapture(e.pointerId);
+  lastPinchDist=null;
+  const now=Date.now();
+  if(now-lastTap<300){resetImageView();showStatus('View reset');}
+  lastTap=now;
+},{passive:true});
+
+panLayer.addEventListener('pointermove',e=>{
+  if(!ptrs[e.pointerId]) return;
+  const ids=Object.keys(ptrs);
+  if(ids.length===1){
+    imgX+=e.clientX-ptrs[e.pointerId].x;
+    imgY+=e.clientY-ptrs[e.pointerId].y;
+    applyImageTransform();
+  } else if(ids.length>=2){
+    const other=ids.find(id=>+id!==e.pointerId);
+    if(other){
+      const ox=ptrs[other].x, oy=ptrs[other].y;
+      const newDist=Math.hypot(e.clientX-ox,e.clientY-oy);
+      if(lastPinchDist!==null){
+        const ratio=newDist/lastPinchDist;
+        if(ratio>0.33&&ratio<3){
+          const midX=(e.clientX+ox)/2, midY=(e.clientY+oy)/2;
+          imgX=midX-(midX-imgX)*ratio;
+          imgY=midY-(midY-imgY)*ratio;
+          imgScale*=ratio;
+          applyImageTransform();
+        }
+      }
+      lastPinchDist=newDist;
+    }
+  }
+  ptrs[e.pointerId]={x:e.clientX,y:e.clientY};
+},{passive:true});
+
+panLayer.addEventListener('pointerup',e=>{delete ptrs[e.pointerId];lastPinchDist=null;});
+panLayer.addEventListener('pointercancel',e=>{delete ptrs[e.pointerId];lastPinchDist=null;});
+
+// ── MIRROR / GRID ──
+mirrorBtn.addEventListener('click',()=>{
+  mirrored=!mirrored;
+  mirrorBtn.style.color=mirrored?'var(--al)':'';
+  applyImageTransform();
+  showStatus(mirrored?'Mirrored':'Mirror off');
+});
+gridBtn.addEventListener('click',()=>{
+  gridOn=!gridOn;
+  gridLayer.classList.toggle('show',gridOn);
+  gridBtn.style.color=gridOn?'var(--al)':'';
+  showStatus(gridOn?'Grid ON':'Grid OFF');
+  saveState();
+});
+
+// ── PEEK (hold to see camera through overlay) ──
+let holdTimer=null;
+document.addEventListener('touchstart',e=>{
+  if(!tracing||panMode) return;
+  holdTimer=setTimeout(()=>{ghostLayer.style.opacity=0;showStatus('Peek...');},700);
+},{passive:true});
+document.addEventListener('touchend',()=>{
+  clearTimeout(holdTimer);
+  if(tracing) ghostLayer.style.opacity=opSlider.value/100*0.92;
+},{passive:true});
+
+// ── BORDER ──
+function centreAndSizeBorder(rw,rh){
+  const sw=window.innerWidth,sh=window.innerHeight,asp=rw/rh;
+  if(asp>=sw/sh){bW=Math.round(sw*0.68);bH=Math.round(bW/asp);}
+  else{bH=Math.round(sh*0.62);bW=Math.round(bH*asp);}
+  bX=Math.round((sw-bW)/2); bY=Math.round((sh-bH)/2);
+  updateBorderLabel(); applyBorder();
+}
+function showBorder(){
+  borderOn=true;
+  if(bW<10||bH<10) centreAndSizeBorder(landscape?selRatioH:selRatioW,landscape?selRatioW:selRatioH);
+  else{updateBorderLabel();applyBorder();}
+  borderEl.classList.add('show'); borderDrag.classList.add('show');
+  [rhCorner,rhRight,rhBottom].forEach(h=>h.classList.add('show'));
+  borderBtn.style.color='var(--al)'; saveState();
+}
+function hideBorder(){
+  borderOn=false;
+  borderEl.classList.remove('show'); borderDrag.classList.remove('show');
+  [rhCorner,rhRight,rhBottom].forEach(h=>h.classList.remove('show'));
+  borderBtn.style.color=''; saveState();
+}
+borderBtn.addEventListener('click',()=>{
+  if(borderOn){hideBorder();sizePanel.classList.remove('show');showStatus('Border OFF');}
+  else{sizePanel.classList.add('show');showBorder();}
+});
+closeSizePanel.addEventListener('click',()=>{sizePanel.classList.remove('show');showStatus('Drag border to align');});
+document.querySelectorAll('.size-btn').forEach(btn=>{
+  btn.addEventListener('click',()=>{
+    selRatioW=+btn.dataset.w; selRatioH=+btn.dataset.h; selLabel=btn.dataset.label;
+    document.querySelectorAll('.size-btn').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    ratioW.value=selRatioW; ratioH.value=selRatioH;
+    centreAndSizeBorder(landscape?selRatioH:selRatioW,landscape?selRatioW:selRatioH);
+  });
+});
+applyRatioBtn.addEventListener('click',()=>{
+  selRatioW=parseFloat(ratioW.value)||1; selRatioH=parseFloat(ratioH.value)||1;
+  selLabel=selRatioW+':'+selRatioH;
+  document.querySelectorAll('.size-btn').forEach(b=>b.classList.remove('active'));
+  centreAndSizeBorder(landscape?selRatioH:selRatioW,landscape?selRatioW:selRatioH);
+  showStatus('Custom ratio '+selLabel);
+});
+portraitBtn.addEventListener('click',()=>{
+  landscape=false; portraitBtn.classList.add('active'); landscapeBtn.classList.remove('active');
+  centreAndSizeBorder(selRatioW,selRatioH);
+});
+landscapeBtn.addEventListener('click',()=>{
+  landscape=true; landscapeBtn.classList.add('active'); portraitBtn.classList.remove('active');
+  centreAndSizeBorder(selRatioH,selRatioW);
+});
+propLockBtn.addEventListener('click',()=>{
+  propLocked=!propLocked; lockedAspect=bW/bH;
+  updatePropLockBtn(); showStatus(propLocked?'Ratio locked':'Free resize'); saveState();
+});
+
+// Border drag & resize
+let bDragging=false,bResizeMode=null,bCornerAxis=null;
+let bSX=0,bSY=0,bSBX=0,bSBY=0,bSBW=0,bSBH=0;
+function bpStart(e,mode){
+  bDragging=(mode==='drag'); bResizeMode=bDragging?null:mode; bCornerAxis=null;
+  bSX=e.clientX; bSY=e.clientY; bSBX=bX; bSBY=bY; bSBW=bW; bSBH=bH;
+  if(propLocked) lockedAspect=bW/bH;
+  e.stopPropagation();
+}
+function bpMove(e){
+  if(!bDragging&&!bResizeMode) return;
+  const dx=e.clientX-bSX, dy=e.clientY-bSY;
+  if(bDragging){bX=bSBX+dx;bY=bSBY+dy;}
+  else if(bResizeMode==='corner'){
+    if(propLocked){
+      if(!bCornerAxis&&(Math.abs(dx)>4||Math.abs(dy)>4)) bCornerAxis=Math.abs(dx)>=Math.abs(dy)?'w':'h';
+      if(bCornerAxis==='w'){bW=Math.max(40,bSBW+dx);bH=Math.round(bW/lockedAspect);}
+      else if(bCornerAxis==='h'){bH=Math.max(40,bSBH+dy);bW=Math.round(bH*lockedAspect);}
+    }else{bW=Math.max(40,bSBW+dx);bH=Math.max(40,bSBH+dy);}
+  }else if(bResizeMode==='right'){bW=Math.max(40,bSBW+dx);if(propLocked)bH=Math.round(bW/lockedAspect);}
+  else if(bResizeMode==='bottom'){bH=Math.max(40,bSBH+dy);if(propLocked)bW=Math.round(bH*lockedAspect);}
+  applyBorder();
+}
+function bpEnd(){bDragging=false;bResizeMode=null;bCornerAxis=null;debouncedSave();}
+[borderDrag,rhCorner,rhRight,rhBottom].forEach(el=>{
+  el.style.touchAction='none';
+  el.addEventListener('pointerdown',e=>{
+    el.setPointerCapture(e.pointerId);
+    if(el===borderDrag) bpStart(e,'drag');
+    else if(el===rhCorner) bpStart(e,'corner');
+    else if(el===rhRight)  bpStart(e,'right');
+    else if(el===rhBottom) bpStart(e,'bottom');
+  });
+  el.addEventListener('pointermove',bpMove);
+  el.addEventListener('pointerup',bpEnd);
+  el.addEventListener('pointercancel',bpEnd);
+});
+
+// ── INIT ──
+loadSaved();
+startCamera(false);
+
+// ── SERVICE WORKER (PWA offline support) ──
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js').catch(() => {});
+  });
+}
+</script>
+</body>
+</html>
