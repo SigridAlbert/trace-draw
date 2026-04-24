@@ -1,0 +1,1 @@
+A tracing app for sketchers, artists, illustrators. Allows upload of an image which has adjustable transparency and resizing options. Image on screen is superimposed on what the device camera points at, and one can trace the image on a paper substrate below. 
